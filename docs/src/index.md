@@ -2,9 +2,9 @@
 CurrentModule = ReplExit
 ```
 
-# ReplExit
+# ReplExit.jl
 
-Documentation for [ReplExit](https://github.com/NittanyLion/ReplExit.jl).
+Documentation for [ReplExit.jl](https://github.com/NittanyLion/ReplExit.jl).
 
 Type `exit` at the Julia REPL — no parentheses — and the session quits. `quit`
 works the same way.
