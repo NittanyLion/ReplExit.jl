@@ -59,26 +59,26 @@ backends are created with. Returns `nothing` if neither can be found, which is
 what happens if a future Julia release renames these internals.
 """
 function ast_transforms()
-    backend = isdefined(Base, :active_repl_backend) ? Base.active_repl_backend : nothing
-    if backend !== nothing && hasproperty(backend, :ast_transforms)
-        return backend.ast_transforms
-    elseif isdefined(REPL, :repl_ast_transforms)
-        return REPL.repl_ast_transforms
-    end
-    return nothing
+    transforms = backend_transforms()
+    return transforms === nothing ? default_transforms() : transforms
 end
 
-# Every list [`transform`](@ref) may have been registered with: the running
-# backend got a *copy* of the defaults, so disabling has to reach both.
-function all_ast_transforms()
-    lists = Any[]
+# The transforms of the REPL backend that is running, if one is.
+function backend_transforms()
     backend = isdefined(Base, :active_repl_backend) ? Base.active_repl_backend : nothing
-    if backend !== nothing && hasproperty(backend, :ast_transforms)
-        push!(lists, backend.ast_transforms)
-    end
-    isdefined(REPL, :repl_ast_transforms) && push!(lists, REPL.repl_ast_transforms)
-    return lists
+    (backend !== nothing && hasproperty(backend, :ast_transforms)) || return nothing
+    return backend.ast_transforms
 end
+
+# The transforms that a new REPL backend starts life with.
+function default_transforms()
+    isdefined(REPL, :repl_ast_transforms) || return nothing
+    return REPL.repl_ast_transforms
+end
+
+# Every list `transform` may have ended up in: a running backend was handed a
+# *copy* of the defaults, so disabling has to reach both.
+all_ast_transforms() = Any[t for t in (backend_transforms(), default_transforms()) if t !== nothing]
 
 """
     ReplExit.enable!() -> Bool
