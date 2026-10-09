@@ -3,6 +3,7 @@
 [![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://NittanyLion.github.io/ReplExit.jl/stable/)
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://NittanyLion.github.io/ReplExit.jl/dev/)
 [![Build Status](https://github.com/NittanyLion/ReplExit.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/NittanyLion/ReplExit.jl/actions/workflows/CI.yml?query=branch%3Amain)
+![authored by: JP](authored_by.svg)
 
 Type `exit` at the Julia REPL — no parentheses — and the session quits.
 
