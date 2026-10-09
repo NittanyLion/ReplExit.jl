@@ -14,7 +14,14 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
+        "Installation" => "installation.md",
+        "Usage" => "usage.md",
+        "How it works" => "internals.md",
+        "Troubleshooting" => "troubleshooting.md",
+        "Reference" => "reference.md",
     ],
+    checkdocs=:all,
+    warnonly=false,
 )
 
 deploydocs(;
