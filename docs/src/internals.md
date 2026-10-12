@@ -44,6 +44,14 @@ julia> ReplExit.transform(ast) === ast
 true
 ```
 
+One wrinkle: other packages register transforms too, and some wrap the whole
+line. Revise, for instance, returns `Expr(:toplevel, <call revise>, <the
+line>)`, so by the time the next transform runs, the bare symbol is the last
+argument of a `:toplevel` nested inside another. `transform` descends through
+such nesting to the last top-level expression before it looks for the symbol.
+Version 0.1.0 did not, which is why `exit` went on showing the function in
+sessions where Revise had been loaded first (issue #5).
+
 The check is deliberately narrow. `f = exit` is an `Expr(:(=), ...)`, not the
 symbol `:exit`, so it passes through. `exit` inside a `begin` block is nested
 inside an `Expr(:block, ...)`, so it passes through. `exit; x = 1` has `:exit`
@@ -57,12 +65,15 @@ and no method redefinition. `ReplExit` adds nothing to `Base`.
 
 ## Registering it
 
-[`ReplExit.enable!`](@ref) pushes `transform` onto the end of the active
-transform list. Which list that is depends on when `enable!` runs.
+[`ReplExit.enable!`](@ref) puts `transform` at the front of the active
+transform list, ahead of whatever other packages have registered, so that it
+normally sees the line as the parser produced it; Revise and Infiltrator then
+wrap the `exit()` call, which is harmless. Which list that is depends on when
+`enable!` runs.
 
 **From a running REPL.** Once the REPL is up, `Base.active_repl_backend` holds
-the backend, and `backend.ast_transforms` is the live list. `enable!` appends
-to it, and the next line you type goes through `transform`.
+the backend, and `backend.ast_transforms` is the live list. `enable!` inserts
+into it, and the next line you type goes through `transform`.
 
 **From `startup.jl`.** `startup.jl` runs before the REPL backend is created,
 so `Base.active_repl_backend` is not yet defined. In that case `enable!` falls

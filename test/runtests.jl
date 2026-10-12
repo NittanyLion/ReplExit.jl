@@ -34,6 +34,21 @@ using Test
         # Preceding top-level expressions survive; only the last one is rewritten.
         @test ReplExit.transform(Expr(:toplevel, line, :(x = 1), :exit)) ==
               Expr(:toplevel, line, :(x = 1), :(exit()))
+
+        # A transform that ran earlier may have wrapped the line in a `:toplevel`
+        # of its own; Revise does exactly this (issue #5).  The bare symbol is
+        # still found, however deep the nesting.
+        wrapped = Expr(:toplevel, :(nothing), Expr(:toplevel, line, :exit))
+        @test ReplExit.transform(wrapped) ==
+              Expr(:toplevel, :(nothing), Expr(:toplevel, line, :(exit())))
+        @test ReplExit.transform(Expr(:toplevel, wrapped)) ==
+              Expr(:toplevel, Expr(:toplevel, :(nothing), Expr(:toplevel, line, :(exit()))))
+        for ast in (Expr(:toplevel, :(nothing), Expr(:toplevel, line, :(f = exit))),
+                    Expr(:toplevel, Expr(:toplevel, line, :exit), :(1 + 1)),  # exit is not last
+                    Expr(:toplevel, :(nothing), Expr(:block, :exit)),         # not top level
+                    Expr(:try, Expr(:toplevel, line, :exit), false, false, :(nothing)))
+            @test ReplExit.transform(ast) === ast
+        end
     end
 
     @testset "enable! / disable! / isenabled" begin
@@ -45,7 +60,7 @@ using Test
             @test !ReplExit.isenabled()
             @test ReplExit.enable!()
             @test ReplExit.isenabled()
-            @test last(transforms) === ReplExit.transform
+            @test first(transforms) === ReplExit.transform  # ahead of other packages' wrappers
             @test !ReplExit.enable!()                   # idempotent
             @test count(t -> t === ReplExit.transform, transforms) == 1
             @test ReplExit.disable!()
@@ -132,48 +147,80 @@ using Test
 
             julia = Base.julia_cmd()
             project = something(Base.active_project(), pkgdir(ReplExit))
-            cmd = `$julia --startup-file=no --history-file=no --color=no
-                   --project=$project -i -e "using ReplExit"`
 
-            pts, ptm = FakePTYs.open_fake_pty()
-            output = UInt8[]
-            outputlock = ReentrantLock()
-            seen(needle) = occursin(needle, lock(() -> String(copy(output)), outputlock))
-            waitfor(f; timeout = 120.0) = timedwait(f, timeout; pollint = 0.1) === :ok
+            # Start `julia -i` over a pseudo-terminal, after running `init` as
+            # `-e` code, and hand `body` the process plus `send`, `seen` and
+            # `waitfor` to drive it with.
+            function session(body, init::AbstractString)
+                cmd = `$julia --startup-file=no --history-file=no --color=no
+                       --project=$project -i -e $init`
 
-            proc = run(cmd, pts, pts, pts; wait = false)
-            Base.close_stdio(pts)
-            reader = @async try
-                while !eof(ptm)
-                    chunk = readavailable(ptm)
-                    lock(() -> append!(output, chunk), outputlock)
+                pts, ptm = FakePTYs.open_fake_pty()
+                output = UInt8[]
+                outputlock = ReentrantLock()
+                seen(needle) = occursin(needle, lock(() -> String(copy(output)), outputlock))
+                waitfor(f; timeout = 120.0) = timedwait(f, timeout; pollint = 0.1) === :ok
+                send(line) = write(ptm, line * "\n")
+
+                proc = run(cmd, pts, pts, pts; wait = false)
+                Base.close_stdio(pts)
+                reader = @async try
+                    while !eof(ptm)
+                        chunk = readavailable(ptm)
+                        lock(() -> append!(output, chunk), outputlock)
+                    end
+                catch          # the pty errors out when the child goes away; that is fine
                 end
-            catch          # the pty errors out when the child goes away; that is fine
+
+                try
+                    @test waitfor(() -> seen("julia>"))                    # REPL is up
+                    body(proc, send, seen, waitfor)
+                finally
+                    process_running(proc) && kill(proc)
+                    close(ptm)
+                    wait(reader)
+                end
             end
 
-            try
-                @test waitfor(() -> seen("julia>"))                    # REPL is up
-
+            # Loaded before the REPL backend exists, as from startup.jl.
+            session("using ReplExit") do proc, send, seen, waitfor
                 # An ordinary line still evaluates.  The strings are assembled at
                 # run time so that the pty's echo of what we typed cannot be
                 # mistaken for the REPL's answer.
-                write(ptm, "println(string(\"AL\", \"IVE\"))\n")
+                send("println(string(\"AL\", \"IVE\"))")
                 @test waitfor(() -> seen("ALIVE"))
                 @test process_running(proc)
 
                 # `exit` used as a value is still just a function.
-                write(ptm, "f = exit; println(string(\"NOT\", \"QUIT\"))\n")
+                send("f = exit; println(string(\"NOT\", \"QUIT\"))")
                 @test waitfor(() -> seen("NOTQUIT"))
                 @test process_running(proc)
 
                 # And a bare `exit` quits.
-                write(ptm, "exit\n")
+                send("exit")
                 @test waitfor(() -> !process_running(proc))
                 @test success(proc)
-            finally
-                process_running(proc) && kill(proc)
-                close(ptm)
-                wait(reader)
+            end
+
+            # Issue #5: another package's transform wraps every line in a fresh
+            # `:toplevel`, the way Revise does.  Registered ahead of ReplExit's,
+            # it hid the bare `exit` from version 0.1.0.
+            wrapper = "pushfirst!(REPL.repl_ast_transforms, ast -> Expr(:toplevel, :(nothing), ast))"
+            session("using REPL, ReplExit; " * wrapper) do proc, send, seen, waitfor
+                send("exit")
+                @test waitfor(() -> !process_running(proc))
+                @test success(proc)
+            end
+
+            # The same wrapper, with ReplExit loaded at the prompt afterwards:
+            # `enable!` then registers on the running backend, in front of it.
+            session("using REPL; " * wrapper) do proc, send, seen, waitfor
+                send("using ReplExit; println(string(\"ENAB\", \"LED\"), ReplExit.isenabled())")
+                @test waitfor(() -> seen("ENABLEDtrue"))
+                @test process_running(proc)
+                send("exit")
+                @test waitfor(() -> !process_running(proc))
+                @test success(proc)
             end
         end
     end

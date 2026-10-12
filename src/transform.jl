@@ -8,6 +8,12 @@
 # so `transform` swaps a trailing bare `exit`/`quit` symbol for a call to
 # `exit()`.  Everything else passes through untouched.
 #
+# Other packages register transforms of their own, and some of them wrap the
+# whole line: Revise returns Expr(:toplevel, <call revise>, <the line>), so the
+# bare symbol ends up one level down.  `transform` therefore descends through
+# nested :toplevel wrappers, and `enable!` registers it at the *front* of the
+# list, so that it normally sees the line as the parser produced it anyway.
+#
 # Compare the popular one-liner
 #
 #     Base.show(io::IO, ::MIME"text/plain", ::typeof(exit)) = exit()
@@ -28,8 +34,12 @@ Rewrite a REPL input `ast` whose last top-level expression is a bare `exit` or
 `quit` symbol into the same AST with `exit()` called instead. Any other input is
 returned unchanged.
 
-This is the function that [`ReplExit.enable!`](@ref) appends to the REPL's list
-of AST transforms.
+The last top-level expression is found by descending through nested `:toplevel`
+expressions, so the rewrite still happens when another transform that ran
+earlier, such as Revise's, has wrapped the line in a `:toplevel` of its own.
+
+This is the function that [`ReplExit.enable!`](@ref) registers with the REPL's
+list of AST transforms.
 
 # Examples
 ```jldoctest
@@ -38,14 +48,19 @@ true
 
 julia> ReplExit.transform(Expr(:toplevel, :(f = exit))) == Expr(:toplevel, :(f = exit))
 true
+
+julia> ReplExit.transform(Expr(:toplevel, :(nothing), Expr(:toplevel, :exit))) ==
+       Expr(:toplevel, :(nothing), Expr(:toplevel, :(exit())))
+true
 ```
 """
 function transform(ast)
     if ast === :exit || ast === :quit
         return :(exit())
-    elseif ast isa Expr && ast.head === :toplevel && !isempty(ast.args) &&
-           (ast.args[end] === :exit || ast.args[end] === :quit)
-        return Expr(:toplevel, ast.args[1:end-1]..., :(exit()))
+    elseif ast isa Expr && ast.head === :toplevel && !isempty(ast.args)
+        rewritten = transform(ast.args[end])
+        rewritten === ast.args[end] && return ast
+        return Expr(:toplevel, ast.args[1:end-1]..., rewritten)
     end
     return ast
 end
@@ -88,6 +103,10 @@ Register [`ReplExit.transform`](@ref) with the REPL, so that a bare `exit` or
 the transform is already registered, and returns `false` (with a warning) if the
 REPL internals it needs are not there.
 
+The transform goes at the front of the REPL's list, ahead of transforms that
+other packages have registered, so that it sees the line as the parser produced
+it rather than wrapped by, say, Revise or Infiltrator.
+
 Called automatically when the package is loaded in an interactive session,
 unless the environment variable `JULIA_REPLEXIT_AUTOENABLE` is set to `"false"`.
 
@@ -102,7 +121,7 @@ function enable!()
         return false
     end
     any(t -> t === transform, transforms) && return false
-    push!(transforms, transform)
+    pushfirst!(transforms, transform)
     return true
 end
 

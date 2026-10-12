@@ -25,9 +25,14 @@ julia> ReplExit.isenabled()
 - `false`: the package is loaded but the transform is not registered. Either
   `JULIA_REPLEXIT_AUTOENABLE` is set to `false` in your environment, or
   [`ReplExit.disable!`](@ref) was called. `ReplExit.enable!()` puts it back.
-- `true`, yet `exit` still shows the function: you are not typing into the
-  standard REPL. Notebooks and some editor integrations evaluate code without
-  going through the REPL's AST transforms. See [Where it applies](@ref).
+- `true`, yet `exit` still shows the function, and Revise (or another package
+  that registers a REPL transform) is loaded: you have ReplExit 0.1.0, which
+  did not see a bare `exit` once Revise had wrapped the line. Upgrade with
+  `] up ReplExit`; version 0.1.1 fixes this.
+- `true`, yet `exit` still shows the function, and no such package is loaded:
+  you are not typing into the standard REPL. Notebooks and some editor
+  integrations evaluate code without going through the REPL's AST transforms.
+  See [Where it applies](@ref).
 
 ## A warning at startup: "ReplExit failed to load"
 
